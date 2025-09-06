@@ -93,9 +93,6 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
-from litellm.router_utils.forward_clientside_headers_by_model_group import (
-    ForwardClientSideHeadersByModelGroup,
-)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -624,9 +621,7 @@ class Router:
         Apply the default settings to the router.
         """
 
-        default_pre_call_checks: OptionalPreCallChecks = [
-            "forward_client_headers_by_model_group",
-        ]
+        default_pre_call_checks: OptionalPreCallChecks = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
 
@@ -892,8 +887,6 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
-                elif pre_call_check == "forward_client_headers_by_model_group":
-                    _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
                     if self.optional_callbacks is None:
                         self.optional_callbacks = []
@@ -4322,8 +4315,12 @@ class Router:
                 deployment_name = kwargs["litellm_params"]["metadata"].get(
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
-                model_group = standard_logging_object.get("model_group", None)
-                id = standard_logging_object.get("model_id", None)
+                # Get model_group and id from kwargs like the sync version does
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
+                model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+                id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -4386,7 +4383,6 @@ class Router:
                 # Update usage
                 # ------------
                 # update cache
-
                 pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
                 ## TPM
@@ -4566,6 +4562,20 @@ class Router:
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
         )
+    
+    def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
+        """
+        Helper to return what the "metadata" field should be called in the request data
+
+        - New endpoints return `litellm_metadata`
+        - Old endpoints return `metadata`
+
+        Context:
+        - LiteLLM used `metadata` as an internal field for storing metadata
+        - OpenAI then started using this field for their metadata
+        - LiteLLM is now moving to using `litellm_metadata` for our metadata
+        """
+        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
@@ -5662,6 +5672,11 @@ class Router:
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
+                
+                # Get mode from database model_info if available, otherwise default to "chat"
+                db_model_info = model.get("model_info", {})
+                mode = db_model_info.get("mode", "chat")
+                
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
@@ -5670,7 +5685,7 @@ class Router:
                     input_cost_per_token=0,
                     output_cost_per_token=0,
                     litellm_provider=llm_provider,
-                    mode="chat",
+                    mode=mode,
                     supported_openai_params=supported_openai_params,
                     supports_system_messages=None,
                 )
@@ -6787,6 +6802,7 @@ class Router:
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
         )
 
         if len(healthy_deployments) == 0:

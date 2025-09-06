@@ -1,4 +1,7 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: vertex_ai/*
+      model: openai/*
+      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+litellm_settings:
+  callbacks: ["cloudzero"]

@@ -25,6 +25,8 @@ def model_list():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "tpm": 1000,  # Add TPM limit so async method doesn't return early
+                "rpm": 100,   # Add RPM limit so async method doesn't return early
             },
             "model_info": {
                 "access_groups": ["group1", "group2"],
@@ -390,6 +392,10 @@ async def test_deployment_callback_on_success(sync_mode):
         }
     ]
     router = Router(model_list=model_list)
+    # Get the actual deployment ID that was generated
+    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-3.5-turbo")
+    deployment_id = gpt_deployment["model_info"]["id"]
+    
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 100
     standard_logging_payload["model_id"] = "100"
@@ -398,7 +404,7 @@ async def test_deployment_callback_on_success(sync_mode):
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
             },
-            "model_info": {"id": 100},
+            "model_info": {"id": deployment_id},
         },
         "standard_logging_object": standard_logging_payload,
     }
@@ -1684,3 +1690,38 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     print(
         "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
     )
+
+
+def test_get_metadata_variable_name_from_kwargs(model_list):
+    """
+    Test _get_metadata_variable_name_from_kwargs method returns correct metadata variable name based on kwargs content.
+    """
+    router = Router(model_list=model_list)
+    
+    # Test case 1: kwargs contains litellm_metadata - should return "litellm_metadata"
+    kwargs_with_litellm_metadata = {
+        "litellm_metadata": {"user": "test"},
+        "metadata": {"other": "data"}
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_litellm_metadata)
+    assert result == "litellm_metadata"
+    
+    # Test case 2: kwargs only contains metadata - should return "metadata"
+    kwargs_with_metadata_only = {
+        "metadata": {"user": "test"}
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_metadata_only)
+    assert result == "metadata"
+    
+    # Test case 3: kwargs contains neither - should return "metadata" (default)
+    kwargs_empty = {}
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_empty)
+    assert result == "metadata"
+    
+    # Test case 4: kwargs contains other keys but no metadata keys - should return "metadata"
+    kwargs_other = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}]
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
+    assert result == "metadata"

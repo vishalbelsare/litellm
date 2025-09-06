@@ -1165,6 +1165,14 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        # Check if response_cost is already calculated and stored in model_call_details
+        # This is used by passthrough endpoints that calculate costs manually
+        if (
+            hasattr(self, "model_call_details")
+            and self.model_call_details.get("response_cost") is not None
+        ):
+            return self.model_call_details["response_cost"]
+
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
@@ -3361,7 +3369,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
-
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
+                    return callback  # type: ignore
+            cloudzero_logger = CloudZeroLogger()
+            _in_memory_loggers.append(cloudzero_logger)
+            return cloudzero_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -3580,6 +3595,11 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
@@ -4106,18 +4126,9 @@ class StandardLoggingPayloadSetup:
         """
         # Generate object key in same format as S3Logger
         from litellm.integrations.s3 import get_s3_object_key
-        from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
         # Only generate object key if cold storage is configured
-        try:
-            configured_cold_storage_logger = (
-                ColdStorageHandler._get_configured_cold_storage_custom_logger()
-            )
-        except Exception as e:
-            verbose_logger.debug(f"Cold storage custom logger unavailable: {e}")
-            return None
-
-        if configured_cold_storage_logger is None:
+        if litellm.configured_cold_storage_logger is None:
             return None
 
         try:
